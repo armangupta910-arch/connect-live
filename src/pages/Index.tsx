@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import SimplePeer from "simple-peer";
+import SimplePeer from "simple-peer-light";
 import BackgroundEffects from "@/components/BackgroundEffects";
 import WelcomeScreen from "@/components/WelcomeScreen";
 import ChatRoom from "@/components/ChatRoom";
