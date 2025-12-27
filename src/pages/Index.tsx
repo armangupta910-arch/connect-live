@@ -170,12 +170,10 @@ const Index = () => {
       console.log("[peer] Connection closed by peer");
       setStatus("peer-disconnected");
       cleanupPeerConnection();
-      // Auto-restart matching when peer leaves
-      setTimeout(() => findNextMatch(), 500);
     });
 
     peerRef.current = peerObj;
-  }, [cleanupPeerConnection, toast, sendSignal, name, findNextMatch]);
+  }, [cleanupPeerConnection, toast, sendSignal, name]);
 
   // Create peer connection for responder
   const createResponderPeer = useCallback((stream: MediaStream, signalData: any, room_code: string, fromPeer: string) => {
@@ -222,8 +220,6 @@ const Index = () => {
       console.log("[peer] Connection closed by peer");
       setStatus("peer-disconnected");
       cleanupPeerConnection();
-      // Auto-restart matching when peer leaves
-      setTimeout(() => findNextMatch(), 500);
     });
 
     peerRef.current = peerObj;
@@ -233,7 +229,7 @@ const Index = () => {
     } catch (e) {
       console.error("[peer] initial signal error:", e);
     }
-  }, [cleanupPeerConnection, toast, sendSignal, name, findNextMatch]);
+  }, [cleanupPeerConnection, toast, sendSignal, name]);
 
   // Handle signaling messages
   const handleSignalMessage = useCallback((msg: any) => {
@@ -283,10 +279,8 @@ const Index = () => {
       console.log("[sigws] Peer disconnected notification from server");
       setStatus("peer-disconnected");
       cleanupPeerConnection();
-      // Auto-restart matching when peer leaves
-      setTimeout(() => findNextMatch(), 500);
     }
-  }, [cleanupPeerConnection, toast, createResponderPeer, flushPendingSignals, findNextMatch]);
+  }, [cleanupPeerConnection, toast, createResponderPeer, flushPendingSignals]);
 
   // Store the latest handleSignalMessage in a ref
   const handleSignalMessageRef = useRef(handleSignalMessage);
