@@ -97,16 +97,19 @@ const Index = () => {
 
   const startWebRTC = useCallback(async (initiatorFlag: boolean, room_code: string, peer: string) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
       });
-      
+
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
+        void localVideoRef.current.play().catch(() => {
+          // Autoplay can be blocked; user can click the video to start playback.
+        });
       }
       localStreamRef.current = stream;
-      
+
       if (initiatorFlag) {
         console.log("[webrtc] Creating peer as initiator");
         const peerObj = new SimplePeer({
@@ -114,7 +117,7 @@ const Index = () => {
           trickle: true,
           stream
         });
-        
+
         peerObj.on("signal", (data) => {
           if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
             signalWsRef.current.send(JSON.stringify({
@@ -126,14 +129,17 @@ const Index = () => {
             }));
           }
         });
-        
+
         peerObj.on("stream", (remoteStream) => {
           console.log("[peer] Received remote stream");
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = remoteStream;
+            void remoteVideoRef.current.play().catch(() => {
+              // Autoplay with audio may be blocked until a user gesture.
+            });
           }
         });
-        
+
         peerObj.on("connect", () => {
           console.log("[peer] Connected!");
           setStatus("connected");
@@ -142,12 +148,12 @@ const Index = () => {
             description: `You are now chatting with ${peer}`,
           });
         });
-        
+
         peerObj.on("error", (err) => {
           console.error("[peer] error:", err);
           setStatus("peer-error: " + err.message);
         });
-        
+
         peerObj.on("close", () => {
           console.log("[peer] Connection closed by peer");
           setStatus("peer-disconnected");
@@ -158,7 +164,7 @@ const Index = () => {
             variant: "destructive",
           });
         });
-        
+
         peerRef.current = peerObj;
       }
     } catch (e) {
@@ -174,29 +180,32 @@ const Index = () => {
 
   const handleSignalMessage = useCallback((msg: any) => {
     if (!msg || !msg.event) return;
-    
+
     if (msg.event === "verified") {
       console.log("[sigws] verified", msg);
       setStatus("verified");
     }
-    
+
     if (msg.event === "signal") {
       if (!peerRef.current && !initiatorFlagRef.current) {
         console.log("[sigws] Creating peer as responder (receiving first signal)");
-        
+
         // For responder, we need to get media first if we don't have it
         const createResponderPeer = async () => {
           let stream = localStreamRef.current;
-          
+
           if (!stream) {
             try {
-              stream = await navigator.mediaDevices.getUserMedia({ 
-                video: true, 
-                audio: true 
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
               });
               localStreamRef.current = stream;
               if (localVideoRef.current) {
                 localVideoRef.current.srcObject = stream;
+                void localVideoRef.current.play().catch(() => {
+                  // Autoplay can be blocked; user can click the video to start playback.
+                });
               }
             } catch (e) {
               console.error("[responder] getUserMedia failed:", e);
@@ -208,13 +217,13 @@ const Index = () => {
               return;
             }
           }
-          
+
           const peerObj = new SimplePeer({
             initiator: false,
             trickle: true,
             stream
           });
-          
+
           peerObj.on("signal", (data) => {
             if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
               signalWsRef.current.send(JSON.stringify({
@@ -226,14 +235,17 @@ const Index = () => {
               }));
             }
           });
-          
+
           peerObj.on("stream", (remoteStream) => {
             console.log("[peer] Received remote stream");
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
+              void remoteVideoRef.current.play().catch(() => {
+                // Autoplay with audio may be blocked until a user gesture.
+              });
             }
           });
-          
+
           peerObj.on("connect", () => {
             console.log("[peer] Connected!");
             setStatus("connected");
@@ -242,12 +254,12 @@ const Index = () => {
               description: "You are now chatting with a stranger",
             });
           });
-          
+
           peerObj.on("error", (err) => {
             console.error("[peer] error:", err);
             setStatus("peer-error: " + err.message);
           });
-          
+
           peerObj.on("close", () => {
             console.log("[peer] Connection closed by peer");
             setStatus("peer-disconnected");
@@ -258,9 +270,9 @@ const Index = () => {
               variant: "destructive",
             });
           });
-          
+
           peerRef.current = peerObj;
-          
+
           // Now signal with the received data
           try {
             peerObj.signal(msg.data);
@@ -268,11 +280,11 @@ const Index = () => {
             console.error("[peer] signal error:", e);
           }
         };
-        
+
         createResponderPeer();
         return; // Don't signal below, we handle it in createResponderPeer
       }
-      
+
       if (peerRef.current) {
         try {
           peerRef.current.signal(msg.data);
@@ -281,18 +293,19 @@ const Index = () => {
         }
       }
     }
-    
+
     if (msg.event === "error") {
       console.error("Signaling error:", msg.message || msg);
       setStatus("error: " + (msg.message || "unknown"));
     }
-    
+
     if (msg.event === "peer-disconnected") {
       console.log("[sigws] Peer disconnected notification from server");
       setStatus("peer-disconnected");
       cleanupPeerConnection();
     }
   }, [cleanupPeerConnection, toast]);
+
 
   const openSignalingWS = useCallback((username: string) => {
     if (signalWsRef.current) return;

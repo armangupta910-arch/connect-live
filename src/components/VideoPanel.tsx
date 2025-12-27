@@ -24,6 +24,17 @@ const VideoPanel = forwardRef<HTMLVideoElement, VideoPanelProps>(
             autoPlay
             playsInline
             muted={isLocal}
+            onLoadedMetadata={(e) => {
+              void e.currentTarget.play().catch(() => {
+                // Autoplay can be blocked until a user gesture.
+              });
+            }}
+            onClick={(e) => {
+              if (!isLocal) e.currentTarget.muted = false;
+              void e.currentTarget.play().catch(() => {
+                // Autoplay can be blocked until a user gesture.
+              });
+            }}
             className="w-full h-full object-cover rounded-2xl"
           />
           
