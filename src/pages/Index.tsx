@@ -20,6 +20,8 @@ const Index = () => {
   const peerRef = useRef<SimplePeer.Instance | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const initiatorFlagRef = useRef<boolean | null>(null);
+  const roomCodeRef = useRef<string>("");
+  const peerNameRef = useRef<string>("");
 
   const { toast } = useToast();
 
@@ -64,6 +66,8 @@ const Index = () => {
     setPeerName("");
     setIsInitiator(null);
     initiatorFlagRef.current = null;
+    roomCodeRef.current = "";
+    peerNameRef.current = "";
   }, []);
 
   // Find next match
@@ -95,82 +99,134 @@ const Index = () => {
     }
   }, [cleanupPeerConnection, name, toast]);
 
-  const startWebRTC = useCallback(async (initiatorFlag: boolean, room_code: string, peer: string) => {
-    // Media is already acquired in openMatchingWS before this is called
-    const stream = localStreamRef.current;
-    
-    if (!stream) {
-      console.error("[webrtc] No local stream available");
+  // Create peer connection for initiator
+  const createInitiatorPeer = useCallback((stream: MediaStream, room_code: string, peer: string) => {
+    console.log("[webrtc] Creating peer as initiator");
+    const peerObj = new SimplePeer({
+      initiator: true,
+      trickle: true,
+      stream
+    });
+
+    peerObj.on("signal", (data) => {
+      console.log("[initiator] Sending signal to", peer);
+      if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
+        signalWsRef.current.send(JSON.stringify({
+          event: "signal",
+          room_code,
+          target: peer,
+          type: "signal",
+          data
+        }));
+      }
+    });
+
+    peerObj.on("stream", (remoteStream) => {
+      console.log("[peer] Received remote stream");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        void remoteVideoRef.current.play().catch(() => {});
+      }
+    });
+
+    peerObj.on("connect", () => {
+      console.log("[peer] Connected!");
+      setStatus("connected");
       toast({
-        title: "Media not ready",
-        description: "Please try again",
+        title: "Connected!",
+        description: `You are now chatting with ${peer}`,
+      });
+    });
+
+    peerObj.on("error", (err) => {
+      console.error("[peer] error:", err);
+      setStatus("peer-error: " + err.message);
+    });
+
+    peerObj.on("close", () => {
+      console.log("[peer] Connection closed by peer");
+      setStatus("peer-disconnected");
+      cleanupPeerConnection();
+      toast({
+        title: "Peer disconnected",
+        description: "The other person has left the chat",
         variant: "destructive",
       });
-      return;
-    }
+    });
 
-    if (initiatorFlag) {
-      console.log("[webrtc] Creating peer as initiator");
-      const peerObj = new SimplePeer({
-        initiator: true,
-        trickle: true,
-        stream
-      });
-
-      peerObj.on("signal", (data) => {
-        if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-          signalWsRef.current.send(JSON.stringify({
-            event: "signal",
-            room_code,
-            target: peer,
-            type: "signal",
-            data
-          }));
-        }
-      });
-
-      peerObj.on("stream", (remoteStream) => {
-        console.log("[peer] Received remote stream");
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = remoteStream;
-          void remoteVideoRef.current.play().catch(() => {
-            // Autoplay with audio may be blocked until a user gesture.
-          });
-        }
-      });
-
-      peerObj.on("connect", () => {
-        console.log("[peer] Connected!");
-        setStatus("connected");
-        toast({
-          title: "Connected!",
-          description: `You are now chatting with ${peer}`,
-        });
-      });
-
-      peerObj.on("error", (err) => {
-        console.error("[peer] error:", err);
-        setStatus("peer-error: " + err.message);
-      });
-
-      peerObj.on("close", () => {
-        console.log("[peer] Connection closed by peer");
-        setStatus("peer-disconnected");
-        cleanupPeerConnection();
-        toast({
-          title: "Peer disconnected",
-          description: "The other person has left the chat",
-          variant: "destructive",
-        });
-      });
-
-      peerRef.current = peerObj;
-    }
-    // For responder (non-initiator), peer is created in handleSignalMessage when signal arrives
+    peerRef.current = peerObj;
   }, [cleanupPeerConnection, toast]);
 
+  // Create peer connection for responder
+  const createResponderPeer = useCallback((stream: MediaStream, signalData: any, room_code: string, fromPeer: string) => {
+    console.log("[webrtc] Creating peer as responder");
+    const peerObj = new SimplePeer({
+      initiator: false,
+      trickle: true,
+      stream
+    });
+
+    peerObj.on("signal", (data) => {
+      console.log("[responder] Sending signal to", fromPeer);
+      if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
+        signalWsRef.current.send(JSON.stringify({
+          event: "signal",
+          room_code,
+          target: fromPeer,
+          type: "signal",
+          data
+        }));
+      }
+    });
+
+    peerObj.on("stream", (remoteStream) => {
+      console.log("[peer] Received remote stream");
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        void remoteVideoRef.current.play().catch(() => {});
+      }
+    });
+
+    peerObj.on("connect", () => {
+      console.log("[peer] Connected!");
+      setStatus("connected");
+      toast({
+        title: "Connected!",
+        description: "You are now chatting with a stranger",
+      });
+    });
+
+    peerObj.on("error", (err) => {
+      console.error("[peer] error:", err);
+      setStatus("peer-error: " + err.message);
+    });
+
+    peerObj.on("close", () => {
+      console.log("[peer] Connection closed by peer");
+      setStatus("peer-disconnected");
+      cleanupPeerConnection();
+      toast({
+        title: "Peer disconnected",
+        description: "The other person has left the chat",
+        variant: "destructive",
+      });
+    });
+
+    peerRef.current = peerObj;
+
+    // Process the initial signal data
+    try {
+      peerObj.signal(signalData);
+    } catch (e) {
+      console.error("[peer] initial signal error:", e);
+    }
+  }, [cleanupPeerConnection, toast]);
+
+  // Handle signaling messages - this will be called from websocket onmessage
   const handleSignalMessage = useCallback((msg: any) => {
     if (!msg || !msg.event) return;
+
+    console.log("[sigws] Received message:", msg.event);
 
     if (msg.event === "verified") {
       console.log("[sigws] verified", msg);
@@ -178,10 +234,12 @@ const Index = () => {
     }
 
     if (msg.event === "signal") {
-      if (!peerRef.current && !initiatorFlagRef.current) {
+      console.log("[sigws] signal received, peerRef:", !!peerRef.current, "initiatorFlag:", initiatorFlagRef.current);
+      
+      // If we're the responder and don't have a peer yet, create one
+      if (!peerRef.current && initiatorFlagRef.current === false) {
         console.log("[sigws] Creating peer as responder (receiving first signal)");
 
-        // Media should already be acquired in openMatchingWS
         const stream = localStreamRef.current;
         
         if (!stream) {
@@ -194,73 +252,14 @@ const Index = () => {
           return;
         }
 
-        const peerObj = new SimplePeer({
-          initiator: false,
-          trickle: true,
-          stream
-        });
-
-        peerObj.on("signal", (data) => {
-          if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-            signalWsRef.current.send(JSON.stringify({
-              event: "signal",
-              room_code: msg.room_code,
-              target: msg.from,
-              type: "signal",
-              data
-            }));
-          }
-        });
-
-        peerObj.on("stream", (remoteStream) => {
-          console.log("[peer] Received remote stream");
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
-            void remoteVideoRef.current.play().catch(() => {
-              // Autoplay with audio may be blocked until a user gesture.
-            });
-          }
-        });
-
-        peerObj.on("connect", () => {
-          console.log("[peer] Connected!");
-          setStatus("connected");
-          toast({
-            title: "Connected!",
-            description: "You are now chatting with a stranger",
-          });
-        });
-
-        peerObj.on("error", (err) => {
-          console.error("[peer] error:", err);
-          setStatus("peer-error: " + err.message);
-        });
-
-        peerObj.on("close", () => {
-          console.log("[peer] Connection closed by peer");
-          setStatus("peer-disconnected");
-          cleanupPeerConnection();
-          toast({
-            title: "Peer disconnected",
-            description: "The other person has left the chat",
-            variant: "destructive",
-          });
-        });
-
-        peerRef.current = peerObj;
-
-        // Now signal with the received data
-        try {
-          peerObj.signal(msg.data);
-        } catch (e) {
-          console.error("[peer] signal error:", e);
-        }
-        
-        return; // Don't signal below, we already handled it
+        createResponderPeer(stream, msg.data, msg.room_code || roomCodeRef.current, msg.from || peerNameRef.current);
+        return;
       }
 
+      // If we already have a peer, just signal it
       if (peerRef.current) {
         try {
+          console.log("[sigws] Signaling existing peer");
           peerRef.current.signal(msg.data);
         } catch (e) {
           console.error("[peer] signal error:", e);
@@ -278,8 +277,13 @@ const Index = () => {
       setStatus("peer-disconnected");
       cleanupPeerConnection();
     }
-  }, [cleanupPeerConnection, toast]);
+  }, [cleanupPeerConnection, toast, createResponderPeer]);
 
+  // Store the latest handleSignalMessage in a ref so websocket always uses latest version
+  const handleSignalMessageRef = useRef(handleSignalMessage);
+  useEffect(() => {
+    handleSignalMessageRef.current = handleSignalMessage;
+  }, [handleSignalMessage]);
 
   const openSignalingWS = useCallback((username: string) => {
     if (signalWsRef.current) return;
@@ -293,7 +297,8 @@ const Index = () => {
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        handleSignalMessage(msg);
+        // Use the ref to always call the latest version of the handler
+        handleSignalMessageRef.current(msg);
       } catch (e) {
         console.error("Invalid JSON on signaling ws:", ev.data);
       }
@@ -306,7 +311,7 @@ const Index = () => {
     ws.onerror = (e) => console.error("[sigws] err", e);
     
     signalWsRef.current = ws;
-  }, [handleSignalMessage]);
+  }, []);
 
   const openMatchingWS = useCallback((username: string) => {
     if (matchWsRef.current) return;
@@ -326,10 +331,15 @@ const Index = () => {
           const rc = msg.room_code;
           const initiator = Boolean(msg.initiator);
           
+          // Store in both state and refs
           setRoomCode(rc);
+          roomCodeRef.current = rc;
+          
           const parts = rc.split("_");
           const peer = parts.find((p: string) => p !== username) || "";
           setPeerName(peer);
+          peerNameRef.current = peer;
+          
           setIsInitiator(initiator);
           initiatorFlagRef.current = initiator;
           setStatus("matched");
@@ -347,7 +357,7 @@ const Index = () => {
                 localVideoRef.current.srcObject = stream;
                 void localVideoRef.current.play().catch(() => {});
               }
-              console.log("[matchws] Media acquired successfully");
+              console.log("[matchws] Media acquired successfully, initiator:", initiator);
             } catch (e) {
               console.error("[matchws] getUserMedia failed:", e);
               toast({
@@ -365,6 +375,7 @@ const Index = () => {
               if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
                 clearInterval(waitForSig);
                 
+                console.log("[matchws] Signaling WS ready, sending join event");
                 signalWsRef.current.send(JSON.stringify({
                   event: "join",
                   room_code: rc,
@@ -372,8 +383,11 @@ const Index = () => {
                   type: initiator ? "offer" : "answer"
                 }));
                 
-                // Now start WebRTC (media already acquired)
-                startWebRTC(initiator, rc, peer);
+                // Only initiator creates peer immediately
+                // Responder waits for signal to arrive
+                if (initiator) {
+                  createInitiatorPeer(localStreamRef.current!, rc, peer);
+                }
               }
             }, 100);
           };
@@ -395,7 +409,7 @@ const Index = () => {
     ws.onerror = (e) => console.error("[matchws] err", e);
     
     matchWsRef.current = ws;
-  }, [openSignalingWS, startWebRTC]);
+  }, [openSignalingWS, createInitiatorPeer, toast]);
 
   const register = useCallback(async (userName: string) => {
     if (!userName) return;
