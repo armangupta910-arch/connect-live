@@ -9,13 +9,34 @@ interface WelcomeScreenProps {
 
 const WelcomeScreen = ({ onRegister }: WelcomeScreenProps) => {
   const [name, setName] = useState('');
+  const [error, setError] = useState('');
+
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setName(value);
+    
+    if (value.includes('_')) {
+      setError('Username cannot contain underscore (_)');
+    } else {
+      setError('');
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name.trim()) {
-      onRegister(name.trim());
+    const trimmedName = name.trim();
+    
+    if (trimmedName.includes('_')) {
+      setError('Username cannot contain underscore (_)');
+      return;
+    }
+    
+    if (trimmedName) {
+      onRegister(trimmedName);
     }
   };
+
+  const isValid = name.trim() && !name.includes('_');
 
   const features = [
     { icon: Video, text: 'HD Video Calls' },
@@ -67,9 +88,14 @@ const WelcomeScreen = ({ onRegister }: WelcomeScreenProps) => {
                 type="text"
                 placeholder="Your name..."
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="h-14 text-lg bg-muted/50 border-border/50 focus:border-primary/50 rounded-xl"
+                onChange={handleNameChange}
+                className={`h-14 text-lg bg-muted/50 border-border/50 focus:border-primary/50 rounded-xl ${
+                  error ? 'border-destructive focus:border-destructive' : ''
+                }`}
               />
+              {error && (
+                <p className="text-sm text-destructive mt-2">{error}</p>
+              )}
             </label>
             
             <Button 
@@ -77,7 +103,7 @@ const WelcomeScreen = ({ onRegister }: WelcomeScreenProps) => {
               variant="glow" 
               size="lg" 
               className="w-full"
-              disabled={!name.trim()}
+              disabled={!isValid}
             >
               Start Matching
               <ArrowRight className="w-5 h-5" />
