@@ -43,20 +43,77 @@ const Index = () => {
 
   // Flush pending signals
   const flushPendingSignals = useCallback(() => {
+    console.group("🚿 flushPendingSignals");
+
     const ws = signalWsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    
-    const pending = pendingSignalsRef.current;
-    if (pending.length > 0) {
-      console.log(`[flushPendingSignals] Flushing ${pending.length} queued signals`);
-      toast({ title: "📤 Flushing signals", description: `Sending ${pending.length} queued signals` });
-      
-      pending.forEach(payload => {
-        ws.send(JSON.stringify(payload));
-        console.log("[flushPendingSignals] Sent queued:", payload.data?.type);
-      });
-      pendingSignalsRef.current = [];
+
+    console.log("🔍 WebSocket condition check");
+    console.log("• ws exists:", ws ? "✅ YES" : "❌ NO");
+
+    console.log(
+      "• ws readyState:",
+      ws
+        ? ws.readyState === WebSocket.OPEN
+          ? "✅ OPEN"
+          : `❌ NOT OPEN (state=${ws.readyState})`
+        : "❌ ws is null/undefined"
+    );
+
+    console.log(
+      "• isVerifiedRef.current:",
+      isVerifiedRef.current ? "✅ TRUE" : "❌ FALSE"
+    );
+
+    if (!ws) {
+      console.warn("⛔ flushPendingSignals aborted: WebSocket does not exist");
+      console.groupEnd();
+      return;
     }
+
+    if (ws.readyState !== WebSocket.OPEN) {
+      console.warn(
+        `⛔ flushPendingSignals aborted: WebSocket not open (state=${ws.readyState})`
+      );
+      console.groupEnd();
+      return;
+    }
+
+    const pending = pendingSignalsRef.current;
+    console.log("📦 Pending signals length:", pending.length);
+
+    if (pending.length === 0) {
+      console.log("ℹ️ No pending signals to flush");
+      console.groupEnd();
+      return;
+    }
+
+    console.log(`🚀 Flushing ${pending.length} queued signals`);
+    toast({
+      title: "📤 Flushing signals",
+      description: `Sending ${pending.length} queued signals`,
+    });
+
+    pending.forEach((payload, index) => {
+      console.log(
+        `➡️ [${index + 1}/${pending.length}] Sending signal`,
+        {
+          type: payload.data?.type,
+          target: payload.target,
+        }
+      );
+
+      ws.send(JSON.stringify(payload));
+
+      console.log(
+        `✅ [${index + 1}/${pending.length}] Sent signal`,
+        payload.data?.type
+      );
+    });
+
+    pendingSignalsRef.current = [];
+    console.log("🧹 Pending signals queue cleared");
+
+    console.groupEnd();
   }, [toast]);
 
   // Cleanup function for peer disconnection
@@ -137,12 +194,14 @@ const Index = () => {
   const createInitiatorPeer = useCallback((stream: MediaStream, room_code: string, peer: string) => {
     console.log("[webrtc] Creating peer as initiator");
     toast({ title: "🚀 Initiator", description: "Creating WebRTC connection as initiator..." });
-    
+    console.log("Starting to create peer object")
     const peerObj = new SimplePeer({
       initiator: true,
       trickle: true,
       stream
     });
+
+    console.log("Peer Object Created")
 
     peerObj.on("signal", (data) => {
       console.log("[initiator] Signal event fired:", data.type, "-> target:", peer);
@@ -393,6 +452,7 @@ const Index = () => {
 
           // Get media FIRST before joining signaling, to prevent race condition
           const setupAndJoin = async () => {
+            console.log("Setting up and Joining")
             toast({ title: "📹 Requesting media", description: "Asking for camera/mic access..." });
             try {
               // Acquire media before anything else
@@ -435,6 +495,7 @@ const Index = () => {
                 
                 // Only initiator creates peer immediately
                 // Responder waits for signal to arrive
+                console.log("Is Initiator - ", initiator)
                 if (initiator) {
                   createInitiatorPeer(localStreamRef.current!, rc, peer);
                 } else {
