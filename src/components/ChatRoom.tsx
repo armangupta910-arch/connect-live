@@ -98,9 +98,9 @@ const ChatRoom = ({
                   isConnected={isConnected}
                 />
                 
-                {/* Searching overlay */}
+                {/* Searching/Connecting overlay */}
                 {(isSearching || isConnecting) && !isConnected && (
-                  <SearchingOverlay />
+                  <SearchingOverlay isConnecting={isConnecting} />
                 )}
               </div>
             </div>
