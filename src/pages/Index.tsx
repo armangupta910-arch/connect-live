@@ -96,24 +96,106 @@ const Index = () => {
   }, [cleanupPeerConnection, name, toast]);
 
   const startWebRTC = useCallback(async (initiatorFlag: boolean, room_code: string, peer: string) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
+    // Media is already acquired in openMatchingWS before this is called
+    const stream = localStreamRef.current;
+    
+    if (!stream) {
+      console.error("[webrtc] No local stream available");
+      toast({
+        title: "Media not ready",
+        description: "Please try again",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (initiatorFlag) {
+      console.log("[webrtc] Creating peer as initiator");
+      const peerObj = new SimplePeer({
+        initiator: true,
+        trickle: true,
+        stream
       });
 
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        void localVideoRef.current.play().catch(() => {
-          // Autoplay can be blocked; user can click the video to start playback.
-        });
-      }
-      localStreamRef.current = stream;
+      peerObj.on("signal", (data) => {
+        if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
+          signalWsRef.current.send(JSON.stringify({
+            event: "signal",
+            room_code,
+            target: peer,
+            type: "signal",
+            data
+          }));
+        }
+      });
 
-      if (initiatorFlag) {
-        console.log("[webrtc] Creating peer as initiator");
+      peerObj.on("stream", (remoteStream) => {
+        console.log("[peer] Received remote stream");
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          void remoteVideoRef.current.play().catch(() => {
+            // Autoplay with audio may be blocked until a user gesture.
+          });
+        }
+      });
+
+      peerObj.on("connect", () => {
+        console.log("[peer] Connected!");
+        setStatus("connected");
+        toast({
+          title: "Connected!",
+          description: `You are now chatting with ${peer}`,
+        });
+      });
+
+      peerObj.on("error", (err) => {
+        console.error("[peer] error:", err);
+        setStatus("peer-error: " + err.message);
+      });
+
+      peerObj.on("close", () => {
+        console.log("[peer] Connection closed by peer");
+        setStatus("peer-disconnected");
+        cleanupPeerConnection();
+        toast({
+          title: "Peer disconnected",
+          description: "The other person has left the chat",
+          variant: "destructive",
+        });
+      });
+
+      peerRef.current = peerObj;
+    }
+    // For responder (non-initiator), peer is created in handleSignalMessage when signal arrives
+  }, [cleanupPeerConnection, toast]);
+
+  const handleSignalMessage = useCallback((msg: any) => {
+    if (!msg || !msg.event) return;
+
+    if (msg.event === "verified") {
+      console.log("[sigws] verified", msg);
+      setStatus("verified");
+    }
+
+    if (msg.event === "signal") {
+      if (!peerRef.current && !initiatorFlagRef.current) {
+        console.log("[sigws] Creating peer as responder (receiving first signal)");
+
+        // Media should already be acquired in openMatchingWS
+        const stream = localStreamRef.current;
+        
+        if (!stream) {
+          console.error("[responder] No local stream available - this shouldn't happen");
+          toast({
+            title: "Media not ready",
+            description: "Please refresh and try again",
+            variant: "destructive",
+          });
+          return;
+        }
+
         const peerObj = new SimplePeer({
-          initiator: true,
+          initiator: false,
           trickle: true,
           stream
         });
@@ -122,8 +204,8 @@ const Index = () => {
           if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
             signalWsRef.current.send(JSON.stringify({
               event: "signal",
-              room_code,
-              target: peer,
+              room_code: msg.room_code,
+              target: msg.from,
               type: "signal",
               data
             }));
@@ -145,7 +227,7 @@ const Index = () => {
           setStatus("connected");
           toast({
             title: "Connected!",
-            description: `You are now chatting with ${peer}`,
+            description: "You are now chatting with a stranger",
           });
         });
 
@@ -166,123 +248,15 @@ const Index = () => {
         });
 
         peerRef.current = peerObj;
-      }
-    } catch (e) {
-      console.error("getUserMedia failed:", e);
-      setStatus("media-error: " + (e as Error).message);
-      toast({
-        title: "Camera/Mic access denied",
-        description: "Please allow access to your camera and microphone",
-        variant: "destructive",
-      });
-    }
-  }, [cleanupPeerConnection, toast]);
 
-  const handleSignalMessage = useCallback((msg: any) => {
-    if (!msg || !msg.event) return;
-
-    if (msg.event === "verified") {
-      console.log("[sigws] verified", msg);
-      setStatus("verified");
-    }
-
-    if (msg.event === "signal") {
-      if (!peerRef.current && !initiatorFlagRef.current) {
-        console.log("[sigws] Creating peer as responder (receiving first signal)");
-
-        // For responder, we need to get media first if we don't have it
-        const createResponderPeer = async () => {
-          let stream = localStreamRef.current;
-
-          if (!stream) {
-            try {
-              stream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
-              });
-              localStreamRef.current = stream;
-              if (localVideoRef.current) {
-                localVideoRef.current.srcObject = stream;
-                void localVideoRef.current.play().catch(() => {
-                  // Autoplay can be blocked; user can click the video to start playback.
-                });
-              }
-            } catch (e) {
-              console.error("[responder] getUserMedia failed:", e);
-              toast({
-                title: "Camera/Mic access denied",
-                description: "Please allow access to your camera and microphone",
-                variant: "destructive",
-              });
-              return;
-            }
-          }
-
-          const peerObj = new SimplePeer({
-            initiator: false,
-            trickle: true,
-            stream
-          });
-
-          peerObj.on("signal", (data) => {
-            if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-              signalWsRef.current.send(JSON.stringify({
-                event: "signal",
-                room_code: msg.room_code,
-                target: msg.from,
-                type: "signal",
-                data
-              }));
-            }
-          });
-
-          peerObj.on("stream", (remoteStream) => {
-            console.log("[peer] Received remote stream");
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = remoteStream;
-              void remoteVideoRef.current.play().catch(() => {
-                // Autoplay with audio may be blocked until a user gesture.
-              });
-            }
-          });
-
-          peerObj.on("connect", () => {
-            console.log("[peer] Connected!");
-            setStatus("connected");
-            toast({
-              title: "Connected!",
-              description: "You are now chatting with a stranger",
-            });
-          });
-
-          peerObj.on("error", (err) => {
-            console.error("[peer] error:", err);
-            setStatus("peer-error: " + err.message);
-          });
-
-          peerObj.on("close", () => {
-            console.log("[peer] Connection closed by peer");
-            setStatus("peer-disconnected");
-            cleanupPeerConnection();
-            toast({
-              title: "Peer disconnected",
-              description: "The other person has left the chat",
-              variant: "destructive",
-            });
-          });
-
-          peerRef.current = peerObj;
-
-          // Now signal with the received data
-          try {
-            peerObj.signal(msg.data);
-          } catch (e) {
-            console.error("[peer] signal error:", e);
-          }
-        };
-
-        createResponderPeer();
-        return; // Don't signal below, we handle it in createResponderPeer
+        // Now signal with the received data
+        try {
+          peerObj.signal(msg.data);
+        } catch (e) {
+          console.error("[peer] signal error:", e);
+        }
+        
+        return; // Don't signal below, we already handled it
       }
 
       if (peerRef.current) {
@@ -360,22 +334,51 @@ const Index = () => {
           initiatorFlagRef.current = initiator;
           setStatus("matched");
 
-          openSignalingWS(username);
-          
-          const waitForSig = setInterval(() => {
-            if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-              clearInterval(waitForSig);
-              
-              signalWsRef.current.send(JSON.stringify({
-                event: "join",
-                room_code: rc,
-                target: peer,
-                type: initiator ? "offer" : "answer"
-              }));
-              
-              startWebRTC(initiator, rc, peer);
+          // Get media FIRST before joining signaling, to prevent race condition
+          const setupAndJoin = async () => {
+            try {
+              // Acquire media before anything else
+              const stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
+              });
+              localStreamRef.current = stream;
+              if (localVideoRef.current) {
+                localVideoRef.current.srcObject = stream;
+                void localVideoRef.current.play().catch(() => {});
+              }
+              console.log("[matchws] Media acquired successfully");
+            } catch (e) {
+              console.error("[matchws] getUserMedia failed:", e);
+              toast({
+                title: "Camera/Mic access denied",
+                description: "Please allow access to your camera and microphone",
+                variant: "destructive",
+              });
+              setStatus("media-error");
+              return;
             }
-          }, 100);
+
+            openSignalingWS(username);
+            
+            const waitForSig = setInterval(() => {
+              if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
+                clearInterval(waitForSig);
+                
+                signalWsRef.current.send(JSON.stringify({
+                  event: "join",
+                  room_code: rc,
+                  target: peer,
+                  type: initiator ? "offer" : "answer"
+                }));
+                
+                // Now start WebRTC (media already acquired)
+                startWebRTC(initiator, rc, peer);
+              }
+            }, 100);
+          };
+
+          setupAndJoin();
         } else {
           console.log("[matchws] msg", msg);
         }
