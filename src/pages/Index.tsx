@@ -183,57 +183,94 @@ const Index = () => {
     if (msg.event === "signal") {
       if (!peerRef.current && !initiatorFlagRef.current) {
         console.log("[sigws] Creating peer as responder (receiving first signal)");
-        const peerObj = new SimplePeer({
-          initiator: false,
-          trickle: true,
-          stream: localStreamRef.current || undefined
-        });
         
-        peerObj.on("signal", (data) => {
-          if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-            signalWsRef.current.send(JSON.stringify({
-              event: "signal",
-              room_code: msg.room_code,
-              target: msg.from,
-              type: "signal",
-              data
-            }));
+        // For responder, we need to get media first if we don't have it
+        const createResponderPeer = async () => {
+          let stream = localStreamRef.current;
+          
+          if (!stream) {
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({ 
+                video: true, 
+                audio: true 
+              });
+              localStreamRef.current = stream;
+              if (localVideoRef.current) {
+                localVideoRef.current.srcObject = stream;
+              }
+            } catch (e) {
+              console.error("[responder] getUserMedia failed:", e);
+              toast({
+                title: "Camera/Mic access denied",
+                description: "Please allow access to your camera and microphone",
+                variant: "destructive",
+              });
+              return;
+            }
           }
-        });
-        
-        peerObj.on("stream", (remoteStream) => {
-          console.log("[peer] Received remote stream");
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
+          
+          const peerObj = new SimplePeer({
+            initiator: false,
+            trickle: true,
+            stream
+          });
+          
+          peerObj.on("signal", (data) => {
+            if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
+              signalWsRef.current.send(JSON.stringify({
+                event: "signal",
+                room_code: msg.room_code,
+                target: msg.from,
+                type: "signal",
+                data
+              }));
+            }
+          });
+          
+          peerObj.on("stream", (remoteStream) => {
+            console.log("[peer] Received remote stream");
+            if (remoteVideoRef.current) {
+              remoteVideoRef.current.srcObject = remoteStream;
+            }
+          });
+          
+          peerObj.on("connect", () => {
+            console.log("[peer] Connected!");
+            setStatus("connected");
+            toast({
+              title: "Connected!",
+              description: "You are now chatting with a stranger",
+            });
+          });
+          
+          peerObj.on("error", (err) => {
+            console.error("[peer] error:", err);
+            setStatus("peer-error: " + err.message);
+          });
+          
+          peerObj.on("close", () => {
+            console.log("[peer] Connection closed by peer");
+            setStatus("peer-disconnected");
+            cleanupPeerConnection();
+            toast({
+              title: "Peer disconnected",
+              description: "The other person has left the chat",
+              variant: "destructive",
+            });
+          });
+          
+          peerRef.current = peerObj;
+          
+          // Now signal with the received data
+          try {
+            peerObj.signal(msg.data);
+          } catch (e) {
+            console.error("[peer] signal error:", e);
           }
-        });
+        };
         
-        peerObj.on("connect", () => {
-          console.log("[peer] Connected!");
-          setStatus("connected");
-          toast({
-            title: "Connected!",
-            description: "You are now chatting with a stranger",
-          });
-        });
-        
-        peerObj.on("error", (err) => {
-          console.error("[peer] error:", err);
-          setStatus("peer-error: " + err.message);
-        });
-        
-        peerObj.on("close", () => {
-          console.log("[peer] Connection closed by peer");
-          setStatus("peer-disconnected");
-          cleanupPeerConnection();
-          toast({
-            title: "Peer disconnected",
-            description: "The other person has left the chat",
-            variant: "destructive",
-          });
-        });
-        
-        peerRef.current = peerObj;
+        createResponderPeer();
+        return; // Don't signal below, we handle it in createResponderPeer
       }
       
       if (peerRef.current) {
