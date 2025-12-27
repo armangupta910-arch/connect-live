@@ -22,8 +22,42 @@ const Index = () => {
   const initiatorFlagRef = useRef<boolean | null>(null);
   const roomCodeRef = useRef<string>("");
   const peerNameRef = useRef<string>("");
+  const pendingSignalsRef = useRef<any[]>([]);
+  const isVerifiedRef = useRef<boolean>(false);
 
   const { toast } = useToast();
+
+  // Helper to send signal - queues if WS not ready
+  const sendSignal = useCallback((payload: any) => {
+    const ws = signalWsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN && isVerifiedRef.current) {
+      ws.send(JSON.stringify(payload));
+      console.log("[sendSignal] Sent:", payload.data?.type || payload.type);
+      toast({ title: "📤 Signal sent", description: `Type: ${payload.data?.type}, To: ${payload.target}` });
+    } else {
+      pendingSignalsRef.current.push(payload);
+      console.log("[sendSignal] Queued (WS not ready or not verified):", payload.data?.type);
+      toast({ title: "⏳ Signal queued", description: `WS ready: ${ws?.readyState === WebSocket.OPEN}, Verified: ${isVerifiedRef.current}` });
+    }
+  }, [toast]);
+
+  // Flush pending signals
+  const flushPendingSignals = useCallback(() => {
+    const ws = signalWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    
+    const pending = pendingSignalsRef.current;
+    if (pending.length > 0) {
+      console.log(`[flushPendingSignals] Flushing ${pending.length} queued signals`);
+      toast({ title: "📤 Flushing signals", description: `Sending ${pending.length} queued signals` });
+      
+      pending.forEach(payload => {
+        ws.send(JSON.stringify(payload));
+        console.log("[flushPendingSignals] Sent queued:", payload.data?.type);
+      });
+      pendingSignalsRef.current = [];
+    }
+  }, [toast]);
 
   // Cleanup function for peer disconnection
   const cleanupPeerConnection = useCallback(() => {
@@ -68,6 +102,8 @@ const Index = () => {
     initiatorFlagRef.current = null;
     roomCodeRef.current = "";
     peerNameRef.current = "";
+    pendingSignalsRef.current = [];
+    isVerifiedRef.current = false;
   }, []);
 
   // Find next match
@@ -109,17 +145,14 @@ const Index = () => {
     });
 
     peerObj.on("signal", (data) => {
-      console.log("[initiator] Sending signal to", peer);
-      toast({ title: "📤 Signal sent", description: `Sending signal to ${peer}` });
-      if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-        signalWsRef.current.send(JSON.stringify({
-          event: "signal",
-          room_code,
-          target: peer,
-          type: "signal",
-          data
-        }));
-      }
+      console.log("[initiator] Signal event fired:", data.type, "-> target:", peer);
+      sendSignal({
+        event: "signal",
+        room_code,
+        target: peer,
+        from: name,
+        data
+      });
     });
 
     peerObj.on("stream", (remoteStream) => {
@@ -151,7 +184,7 @@ const Index = () => {
     });
 
     peerRef.current = peerObj;
-  }, [cleanupPeerConnection, toast]);
+  }, [cleanupPeerConnection, toast, sendSignal, name]);
 
   // Create peer connection for responder
   const createResponderPeer = useCallback((stream: MediaStream, signalData: any, room_code: string, fromPeer: string) => {
@@ -165,17 +198,14 @@ const Index = () => {
     });
 
     peerObj.on("signal", (data) => {
-      console.log("[responder] Sending signal to", fromPeer);
-      toast({ title: "📤 Signal sent", description: `Sending answer to ${fromPeer}` });
-      if (signalWsRef.current && signalWsRef.current.readyState === WebSocket.OPEN) {
-        signalWsRef.current.send(JSON.stringify({
-          event: "signal",
-          room_code,
-          target: fromPeer,
-          type: "signal",
-          data
-        }));
-      }
+      console.log("[responder] Signal event fired:", data.type, "-> target:", fromPeer);
+      sendSignal({
+        event: "signal",
+        room_code,
+        target: fromPeer,
+        from: name,
+        data
+      });
     });
 
     peerObj.on("stream", (remoteStream) => {
@@ -216,7 +246,7 @@ const Index = () => {
       console.error("[peer] initial signal error:", e);
       toast({ title: "❌ Signal error", description: "Failed to process signal", variant: "destructive" });
     }
-  }, [cleanupPeerConnection, toast]);
+  }, [cleanupPeerConnection, toast, sendSignal, name]);
 
   // Handle signaling messages - this will be called from websocket onmessage
   const handleSignalMessage = useCallback((msg: any) => {
@@ -228,7 +258,9 @@ const Index = () => {
     if (msg.event === "verified") {
       console.log("[sigws] verified", msg);
       setStatus("verified");
-      toast({ title: "✓ Verified", description: "Room verified, waiting for signals..." });
+      isVerifiedRef.current = true;
+      toast({ title: "✓ Verified", description: "Room verified, flushing pending signals..." });
+      flushPendingSignals();
     }
 
     if (msg.event === "signal") {
@@ -279,7 +311,7 @@ const Index = () => {
       setStatus("peer-disconnected");
       cleanupPeerConnection();
     }
-  }, [cleanupPeerConnection, toast, createResponderPeer]);
+  }, [cleanupPeerConnection, toast, createResponderPeer, flushPendingSignals]);
 
   // Store the latest handleSignalMessage in a ref so websocket always uses latest version
   const handleSignalMessageRef = useRef(handleSignalMessage);
@@ -398,7 +430,7 @@ const Index = () => {
                   event: "join",
                   room_code: rc,
                   target: peer,
-                  type: initiator ? "offer" : "answer"
+                  role: initiator ? "initiator" : "responder"
                 }));
                 
                 // Only initiator creates peer immediately
